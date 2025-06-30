@@ -101,7 +101,7 @@ func (q *queue) getNext() (*mdm.Command, error) {
 }
 
 // EnqueueCommand writes the command to disk in the queue directory
-func (s *FileStorage) EnqueueCommand(_ context.Context, ids []string, command *mdm.Command) (map[string]error, error) {
+func (s *FileStorage) EnqueueCommand(_ context.Context, ids []string, command *mdm.Command, clearPreviousCommands bool) (map[string]error, error) {
 	idErrs := make(map[string]error)
 	for _, id := range ids {
 		e := s.newEnrollment(id)

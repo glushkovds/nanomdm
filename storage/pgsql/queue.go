@@ -11,10 +11,18 @@ import (
 	"github.com/micromdm/nanomdm/mdm"
 )
 
-func enqueue(ctx context.Context, tx *sql.Tx, ids []string, cmd *mdm.Command) error {
+func enqueue(ctx context.Context, tx *sql.Tx, ids []string, cmd *mdm.Command, clearPreviousCommands bool) error {
 	if len(ids) < 1 {
 		return errors.New("no id(s) supplied to queue command to")
 	}
+
+	if clearPreviousCommands {
+		err := clearPreviousCommandsQueue(ctx, tx, ids, cmd.Command.RequestType)
+		if err != nil {
+			return err
+		}
+	}
+
 	_, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO commands (command_uuid, request_type, command) VALUES ($1, $2, $3);`,
@@ -50,12 +58,12 @@ func enqueue(ctx context.Context, tx *sql.Tx, ids []string, cmd *mdm.Command) er
 	return err
 }
 
-func (s *PgSQLStorage) EnqueueCommand(ctx context.Context, ids []string, cmd *mdm.Command) (map[string]error, error) {
+func (s *PgSQLStorage) EnqueueCommand(ctx context.Context, ids []string, cmd *mdm.Command, clearPreviousCommands bool) (map[string]error, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if err = enqueue(ctx, tx, ids, cmd); err != nil {
+	if err = enqueue(ctx, tx, ids, cmd, clearPreviousCommands); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			return nil, fmt.Errorf("rollback error: %w; while trying to handle error: %v", rbErr, err)
 		}
@@ -195,5 +203,37 @@ WHERE
     (r.status IS NULL OR r.status = 'NotNow') AND 
     enrollment_queue.id = q.id;`,
 		r.ID)
+	return err
+}
+
+func clearPreviousCommandsQueue(ctx context.Context, tx *sql.Tx, ids []string, requestType string) error {
+	idsLen := len(ids)
+	placeholders := make([]string, idsLen)
+	args := make([]interface{}, idsLen+1)
+	args[0] = requestType
+	for i, id := range ids {
+		placeholders[i] = "$" + strconv.Itoa(i+2)
+		args[i+1] = id
+	}
+
+	_, err := tx.ExecContext(
+		ctx,
+		`
+UPDATE enrollment_queue
+SET active = FALSE
+FROM enrollment_queue  AS q
+	INNER JOIN enrollments AS e
+		ON q.id = e.id
+	INNER JOIN commands AS c
+		ON q.command_uuid = c.command_uuid
+	LEFT JOIN command_results r
+		ON r.command_uuid = q.command_uuid AND r.id = q.id
+WHERE 
+    c.request_type = $1 AND
+    e.device_id IN(`+strings.Join(placeholders, ",")+`) AND
+    enrollment_queue.active = TRUE AND
+    (r.status IS NULL OR r.status = 'NotNow') AND 
+    enrollment_queue.id = q.id;`,
+		args...)
 	return err
 }

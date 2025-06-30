@@ -28,9 +28,9 @@ func (ms *MultiAllStorage) ClearQueue(r *mdm.Request) error {
 	return err
 }
 
-func (ms *MultiAllStorage) EnqueueCommand(ctx context.Context, id []string, cmd *mdm.Command) (map[string]error, error) {
+func (ms *MultiAllStorage) EnqueueCommand(ctx context.Context, id []string, cmd *mdm.Command, clearPreviousCommands bool) (map[string]error, error) {
 	val, err := ms.execStores(ctx, func(s storage.AllStorage) (interface{}, error) {
-		return s.EnqueueCommand(ctx, id, cmd)
+		return s.EnqueueCommand(ctx, id, cmd, clearPreviousCommands)
 	})
 	return val.(map[string]error), err
 }

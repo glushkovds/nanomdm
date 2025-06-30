@@ -15,5 +15,5 @@ type CommandAndReportResultsStore interface {
 
 // CommandEnqueuer is able to enqueue MDM commands.
 type CommandEnqueuer interface {
-	EnqueueCommand(ctx context.Context, id []string, cmd *mdm.Command) (map[string]error, error)
+	EnqueueCommand(ctx context.Context, id []string, cmd *mdm.Command, clearPreviousCommands bool) (map[string]error, error)
 }

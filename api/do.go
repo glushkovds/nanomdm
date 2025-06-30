@@ -96,12 +96,13 @@ func doPush(ctx context.Context, r *APIResult, logger log.Logger, pusher push.Pu
 
 // doEnqueue enqueues the MDM command to ids using store.
 // Results and/or errors are accumulated in r and logged to logger.
-func doEnqueue(ctx context.Context, r *APIResult, logger log.Logger, store storage.CommandEnqueuer, cmd *mdm.Command, ids []string) {
+func doEnqueue(ctx context.Context, r *APIResult, logger log.Logger, store storage.CommandEnqueuer, cmd *mdm.Command, ids []string, clearPreviousCommands bool) {
 	var idErrs map[string]error
 	var err error
 	logs := []interface{}{
 		"msg", "enqueue",
 		"id_count", len(ids),
+		"clear_previous_commands", clearPreviousCommands,
 	}
 	if logger != nil {
 		// setup our deferred logger
@@ -145,7 +146,7 @@ func doEnqueue(ctx context.Context, r *APIResult, logger log.Logger, store stora
 	}
 
 	// enqueue command
-	idErrs, err = store.EnqueueCommand(ctx, ids, cmd)
+	idErrs, err = store.EnqueueCommand(ctx, ids, cmd, clearPreviousCommands)
 	if err != nil {
 		r.EnqueueError = NewError(err)
 	}

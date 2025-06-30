@@ -9,7 +9,7 @@ import (
 	"github.com/micromdm/nanomdm/test/e2e"
 )
 
-func TestMySQL(t *testing.T) {
+func TestPgSQL(t *testing.T) {
 	testDSN := os.Getenv("NANOMDM_PGSQL_STORAGE_TEST_DSN")
 	if testDSN == "" {
 		t.Skip("NANOMDM_PGSQL_STORAGE_TEST_DSN not set")

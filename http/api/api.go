@@ -192,8 +192,9 @@ func RawCommandEnqueueToIDsHandler(enqueuer storage.CommandEnqueuer, pusher push
 		}
 
 		noPush := r.URL.Query().Get("nopush") != ""
+		clearPreviousCommands := r.URL.Query().Get("clear_previous_commands") != ""
 
-		er, header, err = pe.RawCommandEnqueueWithPush(r.Context(), cmdBytes, ids, noPush)
+		er, header, err = pe.RawCommandEnqueueWithPush(r.Context(), cmdBytes, ids, noPush, clearPreviousCommands)
 		if err != nil {
 			if er == nil {
 				er = new(api.APIResult)

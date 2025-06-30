@@ -107,7 +107,7 @@ func (s *KV) ClearQueue(r *mdm.Request) error {
 	})
 }
 
-func (s *KV) EnqueueCommand(ctx context.Context, ids []string, cmd *mdm.Command) (map[string]error, error) {
+func (s *KV) EnqueueCommand(ctx context.Context, ids []string, cmd *mdm.Command, clearPreviousCommands bool) (map[string]error, error) {
 	if has, err := s.queue.Has(ctx, join(cmd.CommandUUID, keyQueueRaw)); err != nil {
 		return nil, err
 	} else if has {
