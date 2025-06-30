@@ -60,7 +60,7 @@ func NewPushEnqueuer(store storage.CommandEnqueuer, pusher push.Pusher, opts ...
 
 // Push sends APNs notifications to ids.
 func (pe *PushEnqueuer) Push(ctx context.Context, ids []string) (*APIResult, int, error) {
-	return pe.EnqueueWithPush(ctx, nil, ids, false)
+	return pe.EnqueueWithPush(ctx, nil, ids, false, false)
 }
 
 // EnqueueWithPush enqueues command and can send APNs pushes to ids.
@@ -71,7 +71,7 @@ func (pe *PushEnqueuer) Push(ctx context.Context, ids []string) (*APIResult, int
 // A 207 value indicates some sucesses and some failures.
 // A 200 value indicates no errors (with only successes).
 // Any other value is undefined.
-func (pe *PushEnqueuer) EnqueueWithPush(ctx context.Context, command *mdm.Command, ids []string, noPush bool) (*APIResult, int, error) {
+func (pe *PushEnqueuer) EnqueueWithPush(ctx context.Context, command *mdm.Command, ids []string, noPush bool, clearPreviousCommands bool) (*APIResult, int, error) {
 	// setup our result accumulator
 	r := &APIResult{
 		NoPush: noPush || pe.noPush,
@@ -82,7 +82,7 @@ func (pe *PushEnqueuer) EnqueueWithPush(ctx context.Context, command *mdm.Comman
 	}
 
 	if command != nil {
-		doEnqueue(ctx, r, pe.logger, pe.store, command, ids)
+		doEnqueue(ctx, r, pe.logger, pe.store, command, ids, clearPreviousCommands)
 	}
 
 	if !noPush && !pe.noPush && r.EnqueueError == nil {
@@ -129,7 +129,7 @@ func code(r *APIResult, idCount int) int {
 
 // RawCommandEnqueueWithPush enqueues rawCommand and can send APNs pushes to ids.
 // See [EnqueueWithPush] for calling semantics.
-func (pe *PushEnqueuer) RawCommandEnqueueWithPush(ctx context.Context, rawCommand []byte, ids []string, noPush bool) (*APIResult, int, error) {
+func (pe *PushEnqueuer) RawCommandEnqueueWithPush(ctx context.Context, rawCommand []byte, ids []string, noPush bool, clearPreviousCommands bool) (*APIResult, int, error) {
 	var command *mdm.Command
 	if len(rawCommand) > 0 {
 		var err error
@@ -137,5 +137,5 @@ func (pe *PushEnqueuer) RawCommandEnqueueWithPush(ctx context.Context, rawComman
 			return nil, 500, fmt.Errorf("decoding command: %w", err)
 		}
 	}
-	return pe.EnqueueWithPush(ctx, command, ids, noPush)
+	return pe.EnqueueWithPush(ctx, command, ids, noPush, clearPreviousCommands)
 }
