@@ -78,6 +78,7 @@ func (p *Provider) do(ctx context.Context, pushInfo *mdm.Push) *push.Response {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("apns-priority", "10")
 	if p.expiration > 0 {
 		exp := time.Now().Add(p.expiration)
 		req.Header.Set("apns-expiration", strconv.FormatInt(exp.Unix(), 10))
