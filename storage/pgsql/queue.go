@@ -52,7 +52,7 @@ func enqueue(ctx context.Context, tx *sql.Tx, ids []string, cmd *mdm.Command, cl
 		args[ind] = id
 		args[ind+1] = cmd.CommandUUID
 	}
-	query.WriteString(";")
+	query.WriteString(" on conflict do nothing;")
 
 	_, err = tx.ExecContext(ctx, query.String(), args...)
 	return err
