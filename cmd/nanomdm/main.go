@@ -74,6 +74,7 @@ func main() {
 		flDMURLPfx   = flag.String("dm", "", "URL to send Declarative Management requests to")
 		flAuthProxy  = flag.String("auth-proxy-url", "", "Reverse proxy URL target for MDM-authenticated HTTP requests")
 		flUAZLChal   = flag.Bool("ua-zl-dc", false, "reply with zero-length DigestChallenge for UserAuthenticate")
+		flCertGrace  = flag.Duration("expired-cert-grace", 0, "accept device identity certificates expired no longer than this duration ago")
 	)
 	flag.Parse()
 
@@ -102,9 +103,19 @@ func main() {
 			stdlog.Fatal(err)
 		}
 	}
-	verifier, err := certverify.NewPoolVerifier(caPEM, intsPEM, x509.ExtKeyUsageClientAuth)
+	poolVerifier, err := certverify.NewPoolVerifier(caPEM, intsPEM, x509.ExtKeyUsageClientAuth)
 	if err != nil {
 		stdlog.Fatal(err)
+	}
+	var verifier httpmdm.CertVerifier = poolVerifier
+	mdmSignatureVerifier := cryptoutil.VerifyMdmSignature
+	if *flCertGrace > 0 {
+		expiredLeafVerifier, err := certverify.NewExpiredLeafVerifier(poolVerifier, *flCertGrace)
+		if err != nil {
+			stdlog.Fatal(err)
+		}
+		verifier = certverify.NewFallbackVerifier(poolVerifier, expiredLeafVerifier)
+		mdmSignatureVerifier = cryptoutil.VerifyMdmSignatureAllowExpired
 	}
 
 	mdmStorage, err := cliStorage.Parse(logger)
@@ -151,7 +162,7 @@ func main() {
 
 		// extract certificate from Mdm-Signature header
 		mdmAuthMux.Use(func(h http.Handler) http.Handler {
-			return httpmdm.CertExtractMdmSignatureMiddleware(h, httpmdm.MdmSignatureVerifierFunc(cryptoutil.VerifyMdmSignature), opts...)
+			return httpmdm.CertExtractMdmSignatureMiddleware(h, httpmdm.MdmSignatureVerifierFunc(mdmSignatureVerifier), opts...)
 		})
 	}
 
