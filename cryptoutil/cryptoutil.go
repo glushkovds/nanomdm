@@ -64,6 +64,44 @@ func VerifyMdmSignature(header string, body []byte) (*x509.Certificate, error) {
 	return cert, nil
 }
 
+// VerifyMdmSignatureAllowExpired is VerifyMdmSignature that also accepts a signing time
+// outside of the signer certificate validity, so a device with an expired identity
+// certificate can still check in. The certificate must still be verified against the CA.
+func VerifyMdmSignatureAllowExpired(header string, body []byte) (*x509.Certificate, error) {
+	cert, err := VerifyMdmSignature(header, body)
+	var signingTimeErr *pkcs7.SigningTimeNotValidError
+	if !errors.As(err, &signingTimeErr) {
+		return cert, err
+	}
+	sig, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return nil, err
+	}
+	p7, err := pkcs7.Parse(sig)
+	if err != nil {
+		return nil, err
+	}
+	p7.Content = body
+	cert = p7.GetOnlySigner()
+	if cert == nil {
+		return nil, errors.New("invalid or missing signer")
+	}
+	// pkcs7 cannot skip the signing time check, so the signature is verified against
+	// a copy of the signer whose validity covers the signing time.
+	for i, c := range p7.Certificates {
+		if c == cert {
+			widened := *cert
+			widened.NotBefore = signingTimeErr.SigningTime
+			widened.NotAfter = signingTimeErr.SigningTime
+			p7.Certificates[i] = &widened
+		}
+	}
+	if err = p7.Verify(); err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
 // PEMCertificate returns derBytes encoded as a PEM block
 func PEMCertificate(derBytes []byte) []byte {
 	block := &pem.Block{

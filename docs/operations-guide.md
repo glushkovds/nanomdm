@@ -38,6 +38,12 @@ NanoMDM validates that the device identity certificate is issued from specific C
 
 NanoMDM validates that the device identity certificate is issued from specific CAs. This switch is the path to a file of PEM-encoded intermediate certificates that can be used to build a chain of trust to the CAs to validate enrollments against.
 
+### -expired-cert-grace duration
+
+* accept device identity certificates expired no longer than this duration ago
+
+By default a device whose identity certificate has expired gets an HTTP 400 on every check-in and command report: the `Mdm-Signature` signing time is outside of the certificate validity. iOS does not renew the identity on its own, so such a device stays enrolled but cannot be managed. With this switch (e.g. `-expired-cert-grace=720h`) NanoMDM ignores the signing time and accepts a certificate that expired no longer than the given duration ago. Only the certificate NotAfter is relaxed: the chain, the CA validity and the key usage are verified as usual, and the certificate-authorization association still applies. Use it to bring devices back and renew their identities with an enrollment profile reinstall, then turn it off.
+
 ### -cert-header string
 
 * HTTP header containing TLS client certificate
