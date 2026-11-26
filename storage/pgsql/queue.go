@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/micromdm/nanomdm/mdm"
+
+	"github.com/micromdm/nanolib/log/ctxlog"
 )
 
 func enqueue(ctx context.Context, tx *sql.Tx, ids []string, cmd *mdm.Command, clearPreviousCommands bool) error {
@@ -141,13 +143,18 @@ func (s *PgSQLStorage) StoreCommandReport(r *mdm.Request, result *mdm.CommandRes
 		notNowConstants = "CURRENT_TIMESTAMP, 1"
 		notNowBumpTallySQL = `, not_now_tally = command_results.not_now_tally + 1`
 	}
-	_, err := s.db.ExecContext(
+	// the result is stored only while the command exists. a report for a deleted command
+	// would violate the foreign key, and the device would resend it on every check-in
+	// without ever getting the next command.
+	res, err := s.db.ExecContext(
 		r.Context(), `
 INSERT INTO command_results
     (id, command_uuid, status, result, not_now_at, not_now_tally)
-VALUES
-    ($1, $2, $3, $4, `+notNowConstants+`)
-ON CONFLICT ON CONSTRAINT command_results_pkey DO UPDATE 
+SELECT
+    $1, command_uuid, $3, $4, `+notNowConstants+`
+FROM commands
+WHERE command_uuid = $2
+ON CONFLICT ON CONSTRAINT command_results_pkey DO UPDATE
 SET
     status = EXCLUDED.status,
     result = EXCLUDED.result`+notNowBumpTallySQL+`;`,
@@ -156,7 +163,20 @@ SET
 		result.Status,
 		result.Raw,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	stored, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if stored == 0 {
+		ctxlog.Logger(r.Context(), s.logger).Info(
+			"msg", "command report for unknown command not stored",
+			"command_uuid", result.CommandUUID,
+		)
+	}
+	return nil
 }
 
 func (s *PgSQLStorage) RetrieveNextCommand(r *mdm.Request, skipNotNow bool) (*mdm.Command, error) {
