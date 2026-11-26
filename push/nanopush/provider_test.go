@@ -3,12 +3,15 @@ package nanopush
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/micromdm/nanomdm/mdm"
+	"golang.org/x/net/http2"
 )
 
 func TestPush(t *testing.T) {
@@ -35,6 +38,26 @@ func TestPush(t *testing.T) {
 	// test a multiple push
 	t.Run("multiple-push", func(t *testing.T) {
 		testPushDevices(t, devicePushInfoStrings)
+	})
+
+	// test nil push info does not panic
+	t.Run("nil-concurrent-push-info", func(t *testing.T) {
+		prov := &Provider{
+			baseURL: "https://example.com",
+			client:  &errorDoer{},
+			workers: 2,
+		}
+
+		resp, err := prov.Push(context.Background(), []*mdm.Push{nil, nil})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp == nil {
+			t.Fatal("expected non-nil response")
+		}
+		if len(resp) != 0 {
+			t.Fatalf("expected empty response, got %d", len(resp))
+		}
 	})
 }
 
@@ -90,6 +113,7 @@ func testPushDevices(t *testing.T, input [][]string) {
 	prov := &Provider{
 		baseURL: server.URL,
 		client:  http.DefaultClient,
+		workers: 2,
 	}
 
 	resp, err := prov.Push(context.Background(), pushInfos)
@@ -107,4 +131,85 @@ func testPushDevices(t *testing.T, input [][]string) {
 		}
 	}
 
+}
+
+type errorDoer struct{}
+
+func (d *errorDoer) Do(*http.Request) (*http.Response, error) {
+	return nil, errors.New("fake http error")
+}
+
+// goAwayDoer is a mock Doer that returns an http2.GoAwayError.
+type goAwayDoer struct{}
+
+func (d *goAwayDoer) Do(*http.Request) (*http.Response, error) {
+	return nil, http2.GoAwayError{
+		LastStreamID: 0,
+		ErrCode:      http2.ErrCodeNo,
+		DebugData:    "server shutting down",
+	}
+}
+
+func TestPanicOnGoAwayError(t *testing.T) {
+	prov := &Provider{
+		baseURL: "https://example.com",
+		client:  &goAwayDoer{},
+	}
+
+	pushInfo := &mdm.Push{
+		PushMagic: "47250C9C-1B37-4381-98A9-0B8315A441C7",
+		Topic:     "com.example.apns-topic",
+	}
+	pushInfo.SetTokenString("c2732227a1d8021cfaf781d71fb2f908c61f5861079a00954a5453f1d0281433")
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatal("code panicked on GoAwayError, but should not")
+		}
+	}()
+
+	prov.Push(context.Background(), []*mdm.Push{pushInfo})
+}
+
+func TestMDMPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		magic   string
+		wantErr bool
+	}{
+		{"uuid", "47250C9C-1B37-4381-98A9-0B8315A441C7", false},
+		{"utf8", "magic-\u00e9\u65e5\U0001F600", false},
+		{"quote", `47250C9C"`, true},
+		{"backslash", `47250C9C\`, true},
+		{"newline", "47250C9C\n", true},
+		{"nul", "47250C9C\x00", true},
+		{"invalid-utf8", "47250C9C\xff", true},
+		{"utf8-then-quote", "\u00e947250C9C\"", true},
+		{"utf8-then-invalid-utf8", "\u00e947250C9C\xff", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := mdmPayload(tc.magic)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got payload %q", payload)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if have, want := string(payload), `{"mdm":"`+tc.magic+`"}`; have != want {
+				t.Errorf("payload: have %q, want %q", have, want)
+			}
+			var decoded struct {
+				MDM string `json:"mdm"`
+			}
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if have, want := decoded.MDM, tc.magic; have != want {
+				t.Errorf("decoded: have %q, want %q", have, want)
+			}
+		})
+	}
 }
