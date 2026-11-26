@@ -2,8 +2,43 @@ openapi: 3.0.0
 info:
   version: 0.1.0
   title: NanoMDM API
+servers:
+  - url: http://[::1]:9000/
 paths:
   /v1/pushcert:
+    get:
+      description: Retrieve the topic and expiry of the stored APNs push certificate.
+      security:
+        - basicAuth: []
+      parameters:
+        - in: query
+          name: topic
+          required: true
+          schema:
+            type: string
+            example: 'com.apple.mgmt.External.e3b8ceac-1f18-2c8e-8a63-dd17d99435d9'
+          description: The APNs topic identifying which push certificate to retrieve.
+      responses:
+        '200':
+          description: The topic and expiry of the stored APNs certificate are returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushCertResponse'
+        '400':
+          description: Missing or invalid topic query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          description: Server error retrieving or parsing the stored APNs certificate.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     put:
       description: Upload APNs certificate and private key.
       security:
@@ -28,26 +63,25 @@ paths:
               -----END RSA PRIVATE KEY-----
       responses:
         '200':
-          description: The "topic" (UID attribute) from the uploaded APNs certificate is returned or any errors that occured with the upload and storage.
+          description: The topic and expiry of the APNs certificate are returned.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  topic:
-                    type: string
-                    description: The "topic" (UID attribute) from the uploaded APNs certificate.
-                    example: 'com.apple.mgmt.External.e3b8ceac-1f18-2c8e-8a63-dd17d99435d9'
-                  not_after:
-                    type: string
-                    description: Expiration date of the uploaded APNs certificate.
-                    example: '2026-01-07T04:04:46Z'
+                $ref: '#/components/schemas/PushCertResponse'
+        '400':
+          description: Error(s) with the uploaded APNs certificate or private key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
-           $ref: '#/components/responses/UnauthorizedError'
+          $ref: '#/components/responses/UnauthorizedError'
         '500':
-          description: Error reading HTTP body from request
+          description: Server errors reading HTTP request or storing APNs certificate or private key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /v1/push/{id*}:
     get:
       description: Send APNs push notifications to MDM enrollments
@@ -111,6 +145,73 @@ paths:
           schema:
             type: string
             example: '1'
+  /v1/escrowkeyunlock:
+    post:
+      description: "Perform an Escrow Key Unlock against Apple's API. Uses the APNs certificate of the provided topic for mTLS authentication. Note that despite all parameters being in the HTTP body (form) this endpoint moves the appropriate parameters to the URL query parameters per Apple's documentation. The response body, status, and headers are handed straight through from the Apple endpoint."
+      externalDocs:
+        description: Creating and Using Bypass Codes
+        url: https://developer.apple.com/documentation/devicemanagement/creating-and-using-bypass-codes
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - topic
+                - serial
+                - productType
+                - escrowKey
+                - orgName
+                - guid
+              properties:
+                topic:
+                  type: string
+                  description: APNs Push topic. The certificate keypair that matches this topic is used for mTLS authentication to the Apple Escrow Key Unlock endpoint.
+                  example: "com.apple.mgmt.External.f3abfeac-1f27-4c8e-8a63-dd17555d35d9"
+                serial:
+                  description: The deviceʼs serial number (required).
+                  type: string
+                  example: "C8TJ500QF1MN"
+                imei:
+                  description: The device’s IMEI (omit for non-cellular devices).
+                  type: string
+                imei2:
+                  description: The device’s secondary IMEI (omit for non-cellular and single-SIM devices).
+                  type: string
+                meid:
+                  description: The device’s MEID (omit for non-cellular devices).
+                  type: string
+                productType:
+                  description: "Example: iPad4,1 (required)."
+                  type: string
+                  example: "iPad4,1"
+                escrowKey:
+                  description: Dash-separated "human readable" form of the Activation Lock Bypass Code.
+                  type: string
+                  minLength: 31
+                  example: "3UM43-PUYVY-QYD1-UVCC-HEHJ-FKA4"
+                orgName:
+                  description: "The client-supplied value for auditing purposes: a string that identifies the name of the organization."
+                  type: string
+                  example: "Acme Inc"
+                guid:
+                  description: "The client-supplied value for auditing purposes: a string that identifies the user requesting the removal (such as email, LDAP ID, or name)."
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: Success.
+        '400':
+          description: "Failure: bad request; likely cause is a malformed request query or body."
+        '404':
+          description: "Failure: device is not found, or escrowKey is invalid."
+        '500':
+          description: "Unexpected server error; try again later."
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /version:
     get:
       description: Returns the running NanoMDM version
@@ -173,7 +274,6 @@ components:
   schemas:
     APIResult:
       type: object
-      description: foo
       properties:
         no_push:
           type: boolean
@@ -203,3 +303,29 @@ components:
                   description: Push UUID from Apple Push Notification service servers.
                 command_error:
                   type: string
+    PushCertResponse:
+      type: object
+      description: APNs push certificate and key upload response.
+      required:
+        - topic
+        - not_after
+      properties:
+        topic:
+          type: string
+          description: The "topic" (UID attribute) from the uploaded APNs certificate.
+          example: 'com.apple.mgmt.External.e3b8ceac-1f18-2c8e-8a63-dd17d99435d9'
+        not_after:
+          type: string
+          format: date-time
+          description: Expiration date of the uploaded APNs certificate.
+          example: '2026-01-07T04:04:46Z'
+    ErrorResponse:
+      type: object
+      description: Error response.
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error response string.
+          example: The sun is shining.

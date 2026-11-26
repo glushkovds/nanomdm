@@ -15,7 +15,6 @@ import (
 	"github.com/micromdm/nanomdm/certverify"
 	"github.com/micromdm/nanomdm/cli"
 	"github.com/micromdm/nanomdm/cryptoutil"
-	mdmhttp "github.com/micromdm/nanomdm/http"
 	httpapi "github.com/micromdm/nanomdm/http/api"
 	"github.com/micromdm/nanomdm/http/authproxy"
 	httpmdm "github.com/micromdm/nanomdm/http/mdm"
@@ -23,11 +22,13 @@ import (
 	pushsvc "github.com/micromdm/nanomdm/push/service"
 	"github.com/micromdm/nanomdm/service"
 	"github.com/micromdm/nanomdm/service/certauth"
+	"github.com/micromdm/nanomdm/service/dmhook"
 	"github.com/micromdm/nanomdm/service/dump"
-	"github.com/micromdm/nanomdm/service/microwebhook"
 	"github.com/micromdm/nanomdm/service/multi"
 	"github.com/micromdm/nanomdm/service/nanomdm"
+	"github.com/micromdm/nanomdm/service/webhook"
 
+	"github.com/micromdm/nanolib/envflag"
 	nlhttp "github.com/micromdm/nanolib/http"
 	"github.com/micromdm/nanolib/http/trace"
 	"github.com/micromdm/nanolib/log/stdlogfmt"
@@ -60,7 +61,7 @@ func main() {
 	var (
 		flListen     = flag.String("listen", ":9000", "HTTP listen address")
 		flAPIKey     = flag.String("api", "", "API key for API endpoints")
-		flVersion    = flag.Bool("version", false, "print version")
+		flVersion    = flag.Bool("version", false, "print version and exit")
 		flRootsPath  = flag.String("ca", "", "path to PEM CA cert(s)")
 		flIntsPath   = flag.String("intermediate", "", "path to PEM intermediate cert(s)")
 		flWebhook    = flag.String("webhook-url", "", "URL to send requests to")
@@ -72,11 +73,15 @@ func main() {
 		flMigration  = flag.Bool("migration", false, "enable HTTP endpoint for enrollment migrations")
 		flRetro      = flag.Bool("retro", false, "Allow retroactive certificate-authorization association")
 		flDMURLPfx   = flag.String("dm", "", "URL to send Declarative Management requests to")
+		flDMSendKey  = flag.String("dm-send-hmac-key", "", "attaches an HMAC HTTP header to each DM request using this key")
+		flDMRecvKey  = flag.String("dm-recv-hmac-key", "", "verifies an HMAC HTTP header from each DM request using this key")
 		flAuthProxy  = flag.String("auth-proxy-url", "", "Reverse proxy URL target for MDM-authenticated HTTP requests")
 		flUAZLChal   = flag.Bool("ua-zl-dc", false, "reply with zero-length DigestChallenge for UserAuthenticate")
+		flWHHMACKey  = flag.String("webhook-hmac-key", "", "attaches an HMAC HTTP header to each webhook request using this key")
+		flPushURL    = flag.String("push-url", nanopush.Production, "APNs push server URL")
 		flCertGrace  = flag.Duration("expired-cert-grace", 0, "accept device identity certificates expired no longer than this duration ago")
 	)
-	flag.Parse()
+	envflag.Parse("NANOMDM_", []string{"version", "dsn"})
 
 	if *flVersion {
 		fmt.Println(version)
@@ -137,16 +142,23 @@ func main() {
 			warningText = ": warning: URL has no trailing slash"
 		}
 		logger.Debug("msg", "declarative management setup"+warningText, "url", *flDMURLPfx)
-		dm, err := nanomdm.NewDeclarativeManagementHTTPCaller(*flDMURLPfx, http.DefaultClient)
+		var dmHookOpts []dmhook.Option
+		if *flDMSendKey != "" {
+			dmHookOpts = append(dmHookOpts, dmhook.WithSetHMACSecret([]byte(*flDMSendKey)))
+		}
+		if *flDMRecvKey != "" {
+			dmHookOpts = append(dmHookOpts, dmhook.WithVerifyHMACSecret([]byte(*flDMRecvKey)))
+		}
+		dmHook, err := dmhook.New(*flDMURLPfx, dmHookOpts...)
 		if err != nil {
 			stdlog.Fatal(err)
 		}
-		nanoOpts = append(nanoOpts, nanomdm.WithDeclarativeManagement(dm))
+		nanoOpts = append(nanoOpts, nanomdm.WithDeclarativeManagement(dmHook))
 	}
 	nano := nanomdm.New(mdmStorage, nanoOpts...)
 
 	mux := http.NewServeMux()
-	mdmAuthMux := mdmhttp.NewMWMux(mux)
+	mdmAuthMux := nlhttp.NewMWMux(mux)
 
 	if *flCertHeader != "" {
 		// extract certificate from HTTP header (mTLS)
@@ -174,7 +186,14 @@ func main() {
 	if !*flDisableMDM {
 		var mdmService service.CheckinAndCommandService = nano
 		if *flWebhook != "" {
-			webhookService := microwebhook.New(*flWebhook, mdmStorage)
+			whOpts := []webhook.Option{
+				webhook.WithTokenUpdateTalley(mdmStorage),
+				webhook.WithEventID(trace.GetTraceID),
+			}
+			if *flWHHMACKey != "" {
+				whOpts = append(whOpts, webhook.WithHMACSecret([]byte(*flWHHMACKey)))
+			}
+			webhookService := webhook.New(*flWebhook, whOpts...)
 			mdmService = multi.New(logger.With("service", "multi"), mdmService, webhookService)
 		}
 		certAuthOpts := []certauth.Option{certauth.WithLogger(logger.With("service", "certauth"))}
@@ -208,7 +227,7 @@ func main() {
 				stdlog.Fatal(err)
 			}
 
-			apMux := mdmhttp.NewMWMux(mdmAuthMux)
+			apMux := nlhttp.NewMWMux(mdmAuthMux)
 
 			// wrap with enrollment ID lookup middleware
 			apMux.Use(func(h http.Handler) http.Handler {
@@ -229,14 +248,20 @@ func main() {
 	if *flAPIKey != "" {
 		const apiUsername = "nanomdm"
 
-		apiAuthMux := mdmhttp.NewMWMux(mux)
+		apiAuthMux := nlhttp.NewMWMux(mux)
 
 		apiAuthMux.Use(func(h http.Handler) http.Handler {
 			return nlhttp.NewSimpleBasicAuthHandler(h, apiUsername, *flAPIKey, "nanomdm")
 		})
 
+		opts := []nanopush.Option{}
+		if *flPushURL != "" {
+			logger.Info("msg", "custom push server URL specified", "url", *flPushURL)
+			opts = append(opts, nanopush.WithPushServerURL(*flPushURL))
+		}
+
 		// create our push provider and push service
-		pushProviderFactory := nanopush.NewFactory()
+		pushProviderFactory := nanopush.NewFactory(opts...)
 		pushService := pushsvc.New(mdmStorage, mdmStorage, pushProviderFactory, logger.With("service", "push"))
 
 		// register API handlers

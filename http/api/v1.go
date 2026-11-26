@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	APIEndpointPushCert = "/pushcert"
-	APIEndpointPush     = "/push/"    // note trailing slash
-	APIEndpointEnqueue  = "/enqueue/" // note trailing slash
+	APIEndpointPushCert        = "/pushcert"
+	APIEndpointPush            = "/push/"    // note trailing slash
+	APIEndpointEnqueue         = "/enqueue/" // note trailing slash
+	APIEndpointEscrowKeyUnlock = "/escrowkeyunlock"
 )
 
 // Mux can register HTTP handlers.
@@ -27,6 +28,7 @@ type Mux interface {
 // APIStorage is required for the API handlers.
 type APIStorage interface {
 	storage.PushCertStore
+	storage.PushCertStorer
 	storage.CommandEnqueuer
 }
 
@@ -42,13 +44,22 @@ func handlerName(endpoint string) string {
 // handlers should have that sub-path stripped from the request.
 // The logger is adorned with a "handler" key of the endpoint name.
 func HandleAPIv1(prefix string, mux Mux, logger log.Logger, store APIStorage, pusher push.Pusher) {
-	// register API handler for push cert storage/upload
+	// register API handlers for push cert retrieval (GET) and upload (PUT)
+	pushCertLogger := logger.With("handler", handlerName(APIEndpointPushCert))
+	pushCertPUT := NewStorePushCertHandler(store, pushCertLogger)
+	pushCertGET := NewRetrievePushCertHandler(store, pushCertLogger)
 	mux.Handle(
 		prefix+APIEndpointPushCert,
-		StorePushCertHandler(
-			store,
-			logger.With("handler", handlerName(APIEndpointPushCert)),
-		),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPut:
+				pushCertPUT.ServeHTTP(w, r)
+			case http.MethodGet:
+				pushCertGET.ServeHTTP(w, r)
+			default:
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			}
+		}),
 	)
 
 	// register API handler for sending APNs push notifications
@@ -76,5 +87,11 @@ func HandleAPIv1(prefix string, mux Mux, logger log.Logger, store APIStorage, pu
 				logger.With("handler", handlerName(APIEndpointEnqueue)),
 			),
 		),
+	)
+
+	// register API handler for escrow key unlock
+	mux.Handle(
+		prefix+APIEndpointEscrowKeyUnlock,
+		NewEscrowKeyUnlockHandler(store, nil, logger.With("handler", handlerName(APIEndpointEscrowKeyUnlock))),
 	)
 }

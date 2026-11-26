@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
@@ -17,7 +18,12 @@ type pushCertUploader interface {
 	PushCert(ctx context.Context, pemCert, pemKey []byte) error
 }
 
-func pushcert(t *testing.T, ctx context.Context, a pushCertUploader, store storage.PushCertStore) {
+type pushStore interface {
+	storage.PushCertStore
+	storage.PushCertStorer
+}
+
+func pushcert(t *testing.T, ctx context.Context, a pushCertUploader, store pushStore) {
 	pemCert, err := os.ReadFile("../../test/e2e/testdata/push.pem")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +56,11 @@ func pushcert(t *testing.T, ctx context.Context, a pushCertUploader, store stora
 		t.Fatal(err)
 	}
 
-	tlsCert, staleToken1, err := store.RetrievePushCert(ctx, topic)
+	pemCert, pemKey, staleToken1, err := store.RetrievePushCert(ctx, topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsCert, err := tls.X509KeyPair(pemCert, pemKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +80,7 @@ func pushcert(t *testing.T, ctx context.Context, a pushCertUploader, store stora
 		t.Fatal(err)
 	}
 
-	_, staleToken2, err := store.RetrievePushCert(ctx, topic)
+	_, _, staleToken2, err := store.RetrievePushCert(ctx, topic)
 	if err != nil {
 		t.Fatal(err)
 	}
